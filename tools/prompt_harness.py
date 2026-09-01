@@ -17,7 +17,9 @@ import argparse
 import json
 import os
 import pathlib
+import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -34,33 +36,49 @@ import repair  # noqa: E402  (after sys.path manipulation)
 # API key resolution
 # ---------------------------------------------------------------------------
 
-def _resolve_api_key() -> str:
-    """Return the Gemini API key or exit with a clear message."""
-    key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if key:
-        return key
-
-    key_file = pathlib.Path.home() / ".config" / "gemini-key"
-    if key_file.is_file():
-        key = key_file.read_text().strip()
+def _resolve_api_key(provider: str = "gemini") -> str:
+    """Return the API key for *provider* or exit with a clear message."""
+    if provider == "muse":
+        key = os.environ.get("MUSE_API_KEY", "").strip()
         if key:
             return key
-
-    print(
-        "ERROR: Gemini API key not found.\n"
-        "Set the GEMINI_API_KEY environment variable, or write the key to\n"
-        f"  {key_file}\n"
-        "(one line, no quotes).",
-        file=sys.stderr,
-    )
-    sys.exit(1)
+        key_file = pathlib.Path.home() / ".config" / "muse-key"
+        if key_file.is_file():
+            key = key_file.read_text().strip()
+            if key:
+                return key
+        print(
+            "ERROR: Muse API key not found.\n"
+            "Set the MUSE_API_KEY environment variable, or write the key to\n"
+            f"  {key_file}\n"
+            "(one line, no quotes).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    else:
+        key = os.environ.get("GEMINI_API_KEY", "").strip()
+        if key:
+            return key
+        key_file = pathlib.Path.home() / ".config" / "gemini-key"
+        if key_file.is_file():
+            key = key_file.read_text().strip()
+            if key:
+                return key
+        print(
+            "ERROR: Gemini API key not found.\n"
+            "Set the GEMINI_API_KEY environment variable, or write the key to\n"
+            f"  {key_file}\n"
+            "(one line, no quotes).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
 # Gemini API call
 # ---------------------------------------------------------------------------
 
-def _call_gemini(prompt: str, model: str, api_key: str) -> str:
+def _call_gemini(prompt: str, model: str, key: str) -> str:
     """Send *prompt* to the Gemini REST API and return the text response."""
     url = (
         f"https://generativelanguage.googleapis.com/v1beta/"
@@ -75,7 +93,7 @@ def _call_gemini(prompt: str, model: str, api_key: str) -> str:
         data=body,
         headers={
             "Content-Type": "application/json",
-            "x-goog-api-key": api_key,
+            "x-goog-api-key": key,
         },
         method="POST",
     )
@@ -124,6 +142,41 @@ def _call_gemini(prompt: str, model: str, api_key: str) -> str:
             file=sys.stderr,
         )
         sys.exit(2)
+
+
+# ---------------------------------------------------------------------------
+# Muse CLI call
+# ---------------------------------------------------------------------------
+
+def _call_muse(prompt: str, model: str, key: str) -> str:
+    """Send *prompt* via the `muse` CLI and return the text response."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = subprocess.run(
+            ["muse", "exec", "--api-key-stdin", "--provider", "meta", "--model", model, "--reasoning-effort", "high", prompt],
+            input=key,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            cwd=tmpdir,
+        )
+        if result.returncode != 0:
+            print(result.stderr, file=sys.stderr)
+            sys.exit(2)
+        lines = result.stdout.splitlines()
+        filtered = [l for l in lines if not l.startswith("muse:")]
+        return "\n".join(filtered)
+
+
+# ---------------------------------------------------------------------------
+# Dispatch
+# ---------------------------------------------------------------------------
+
+def _call_model(prompt: str, args) -> str:
+    """Dispatch to the correct backend based on args.provider."""
+    if args.provider == "muse":
+        return _call_muse(prompt, args.model, args.api_key)
+    else:
+        return _call_gemini(prompt, args.model, args.api_key)
 
 
 # ---------------------------------------------------------------------------
@@ -205,8 +258,14 @@ def main() -> None:
     )
     parser.add_argument(
         "--model",
-        default="gemini-3.6-flash",
-        help="Gemini model name (default: gemini-3.6-flash).",
+        default=None,
+        help="Model name (default: gemini-3.6-flash for gemini, muse-spark-1.2-contributor for muse).",
+    )
+    parser.add_argument(
+        "--provider",
+        choices=["gemini", "muse"],
+        default="gemini",
+        help="Backend provider (default: gemini).",
     )
     parser.add_argument(
         "--show",
@@ -215,7 +274,21 @@ def main() -> None:
         metavar="N",
         help="Print the raw model output for case N (1-based) and exit.",
     )
+    parser.add_argument(
+        "--out",
+        default=None,
+        dest="out",
+        metavar="PATH",
+        help="Write a JSON report to PATH.",
+    )
     args = parser.parse_args()
+
+    # Resolve default model from provider when --model is not given.
+    if args.model is None:
+        if args.provider == "muse":
+            args.model = "muse-spark-1.2-contributor"
+        else:
+            args.model = "gemini-3.6-flash"
 
     # --- load template & cases --------------------------------------------
     template_path = pathlib.Path(args.prompt_file)
@@ -230,7 +303,7 @@ def main() -> None:
         sys.exit(1)
     cases: List[Dict[str, Any]] = json.loads(cases_path.read_text())
 
-    api_key = _resolve_api_key()
+    args.api_key = _resolve_api_key(args.provider)
 
     # --- single-case debug mode -------------------------------------------
     if args.show is not None:
@@ -243,7 +316,7 @@ def main() -> None:
             sys.exit(1)
         case = cases[idx]
         prompt = _render_template(template, case["ocr"], case["transcript"])
-        raw = _call_gemini(prompt, args.model, api_key)
+        raw = _call_model(prompt, args)
         print(f"=== Raw output for case {args.show}: {case['name']} ===")
         print(raw)
         print()
@@ -259,6 +332,7 @@ def main() -> None:
     passed = 0
     total = len(cases)
     latencies: List[float] = []
+    report_cases: List[Dict[str, Any]] = []
 
     # Header
     print(f"{'#':>3}  {'Case':<32} {'Time':>7}  {'Result':<6}  Details")
@@ -269,7 +343,7 @@ def main() -> None:
         prompt = _render_template(template, case["ocr"], case["transcript"])
 
         t0 = time.monotonic()
-        raw = _call_gemini(prompt, args.model, api_key)
+        raw = _call_model(prompt, args)
         elapsed = time.monotonic() - t0
         latencies.append(elapsed)
 
@@ -283,15 +357,39 @@ def main() -> None:
         if ok:
             passed += 1
 
+        report_cases.append({
+            "name": name,
+            "seconds": elapsed,
+            "passed": ok,
+            "detail": detail,
+            "raw": raw,
+        })
+
     # Summary
     print("-" * 90)
     mean_lat = sum(latencies) / len(latencies) if latencies else 0.0
     print(
         f"Result: {passed}/{total} passed  |  "
         f"mean latency {mean_lat:.2f}s  |  "
+        f"provider {args.provider}  |  "
         f"model {args.model}  |  "
         f"prompt {template_path.name}"
     )
+
+    # --out report
+    if args.out is not None:
+        report = {
+            "provider": args.provider,
+            "model": args.model,
+            "prompt_file": str(template_path),
+            "passed": passed,
+            "total": total,
+            "mean_latency": mean_lat,
+            "cases": report_cases,
+        }
+        out_path = pathlib.Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
 
     sys.exit(0 if passed == total else 1)
 

@@ -194,11 +194,20 @@ fun CaptureScreen(
 
             Spacer(modifier = Modifier.height(S.md))
 
-            // the model badge, on its own, below the pill. Tap to import a .litertlm.
+            // the model badge, on its own, below the pill. With no model, a tap imports one.
+            // Once one is loaded only a long-press does: the badge sits right under the pill,
+            // and a stray tap opened the file picker, sent the app to the background and let
+            // ColorOS kill it mid-capture.
+            val hasModel = modelStatus.startsWith("offline")
             Box(
                 modifier = Modifier
                     .background(S.InkDeep.copy(alpha = 0.55f), S.r6)
-                    .clickable(enabled = !importing) { pickModel.launch(arrayOf("*/*")) }
+                    .pointerInput(hasModel, importing) {
+                        detectTapGestures(
+                            onTap = { if (!hasModel && !importing) pickModel.launch(arrayOf("*/*")) },
+                            onLongPress = { if (!importing) pickModel.launch(arrayOf("*/*")) }
+                        )
+                    }
                     .padding(horizontal = S.md, vertical = S.xs)
             ) {
                 BracketLabel(
@@ -214,6 +223,7 @@ fun CaptureScreen(
                 is CaptureStage.Photo -> "capturing"
                 is CaptureStage.Reading -> "reading the image"
                 is CaptureStage.Listening -> "listening"
+                is CaptureStage.Transcribing -> "transcribing, on this phone"
                 is CaptureStage.Thinking -> "understanding, on this phone"
                 is CaptureStage.Done -> "saved"
                 is CaptureStage.Failed -> currentStage.reason

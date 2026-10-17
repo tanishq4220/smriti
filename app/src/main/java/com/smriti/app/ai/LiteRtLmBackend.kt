@@ -11,6 +11,7 @@ import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.ResponseFormat
 import com.google.ai.edge.litertlm.Role
+import com.google.ai.edge.litertlm.ThinkingConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -24,7 +25,19 @@ class LiteRtLmBackend(
         maxTokens: Int,
         jsonSchema: String?
     ): String = withContext(Dispatchers.IO) {
-        val conv = engine.createConversation(ConversationConfig(enableResponseFormat = true))
+        val conv = engine.createConversation(
+            ConversationConfig(
+                enableResponseFormat = true,
+                // Gemma 4 thinks before answering by default. On this phone every decode token
+                // costs ~0.3 s, and the thought lands in a side channel rather than the text, so
+                // a plain prompt came back empty after 44 tokens. Extraction and recall need the
+                // answer, not the reasoning.
+                thinkingConfig = ThinkingConfig(enableThinking = false),
+                // Caller's budget, enforced by the runtime: a rambling model stops here instead
+                // of decoding until the context window fills.
+                maxOutputToken = maxTokens
+            )
+        )
         try {
             val reply = conv.sendMessage(
                 message = Message(
@@ -40,9 +53,14 @@ class LiteRtLmBackend(
                     "${b.lastDecodeTokenCount} tok @ ${"%.1f".format(b.lastDecodeTokensPerSecond)} tok/s · " +
                     "ttft ${"%.2f".format(b.timeToFirstTokenInSecond)} s")
             }
-            reply.contents.contents
+            val text = reply.contents.contents
                 .filterIsInstance<Content.Text>()
                 .joinToString("") { it.text }
+            if (reply.channels.isNotEmpty()) {
+                Log.i(TAG, "side channels: ${reply.channels.mapValues { it.value.length }} chars")
+            }
+            // Never hand back nothing when the model did answer, just on another channel.
+            text.ifBlank { reply.channels.values.joinToString("\n").trim() }
         } finally {
             conv.close()
         }

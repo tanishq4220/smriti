@@ -1,6 +1,8 @@
 package com.smriti.app.ui
 
 import android.view.ViewGroup
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -83,11 +85,20 @@ fun CaptureScreen(
     var isMicHeld by remember { mutableStateOf(false) }
     var isVoiceOnlyCapture by remember { mutableStateOf(false) }
     var bubbleOn by remember { mutableStateOf(BubbleLauncher.isRunning()) }
+    val modelStatus by vm.modelStatus.collectAsState()
+    val importing by vm.importing.collectAsState()
+    // .litertlm has no registered MIME type, so the picker has to offer every file;
+    // ModelImporter rejects anything that is not a .litertlm.
+    val pickModel = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let(vm::importModel)
+    }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 bubbleOn = BubbleLauncher.isRunning()
+                // A model may have been pushed over adb while the app was in the background.
+                if (!importing) vm.refreshModelStatus()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -183,14 +194,15 @@ fun CaptureScreen(
 
             Spacer(modifier = Modifier.height(S.md))
 
-            // the build badge, on its own, below the pill
+            // the model badge, on its own, below the pill. Tap to import a .litertlm.
             Box(
                 modifier = Modifier
                     .background(S.InkDeep.copy(alpha = 0.55f), S.r6)
+                    .clickable(enabled = !importing) { pickModel.launch(arrayOf("*/*")) }
                     .padding(horizontal = S.md, vertical = S.xs)
             ) {
                 BracketLabel(
-                    text = BuildBadge.label,
+                    text = modelStatus,
                     labelColor = S.OnDark.copy(alpha = 0.75f),
                     bracketColor = S.Red
                 )

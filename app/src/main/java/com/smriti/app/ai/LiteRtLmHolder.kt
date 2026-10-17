@@ -131,10 +131,25 @@ object LiteRtLmHolder {
         @Volatile private var proven = false
         override val label: String get() = gpu.label
 
-        override suspend fun generate(prompt: String, maxTokens: Int, jsonSchema: String?): String {
-            if (proven) return gpu.generate(prompt, maxTokens, jsonSchema)
+        override suspend fun generate(prompt: String, maxTokens: Int, jsonSchema: String?): String =
+            guarded { it.generate(prompt, maxTokens, jsonSchema) }
+
+        // Callbacks carry the full text so far, so a CPU retry simply restarts what they show.
+        override suspend fun generateStreaming(
+            prompt: String,
+            maxTokens: Int,
+            jsonSchema: String?,
+            think: Boolean,
+            onThinking: (String) -> Unit,
+            onAnswer: (String) -> Unit
+        ): String = guarded {
+            it.generateStreaming(prompt, maxTokens, jsonSchema, think, onThinking, onAnswer)
+        }
+
+        private suspend fun guarded(run: suspend (LlmBackend) -> String): String {
+            if (proven) return run(gpu)
             return try {
-                gpu.generate(prompt, maxTokens, jsonSchema).also {
+                run(gpu).also {
                     proven = true
                     policy.markGpuAttemptSurvived()
                 }
@@ -143,7 +158,7 @@ object LiteRtLmHolder {
                 Log.w(TAG, "GPU failed its first generation (${t.message}); quarantining, retrying on CPU")
                 policy.quarantineGpu()
                 reset()
-                get(context, Target.CPU).getOrThrow().generate(prompt, maxTokens, jsonSchema)
+                run(get(context, Target.CPU).getOrThrow())
             }
         }
 

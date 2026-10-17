@@ -136,10 +136,10 @@ class LiteRtLmBackend(
         const val TAG = "SmritiEngine"
 
         /**
-         * Cap on reasoning tokens. At ~5 tok/s on this phone, 256 tokens is under a minute of
-         * visible thinking before the answer must start; unbounded, Gemma can reason for longer
-         * than anyone will wait.
+         * Cap on reasoning tokens. At ~4.7 tok/s on the Realme, 256 made an Ask take ~75 s;
+         * 96 is about 20 s of visible thinking before the answer must start. Unbounded, Gemma
+         * can reason for longer than anyone will wait.
          */
-        const val THINK_BUDGET = 256
+        const val THINK_BUDGET = 96
     }
 }

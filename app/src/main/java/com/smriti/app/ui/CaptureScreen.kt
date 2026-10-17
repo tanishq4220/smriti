@@ -50,6 +50,7 @@ import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.smriti.app.capture.SpeechLanguage
 import com.smriti.app.capture.BubbleLauncher
 import com.smriti.app.capture.CaptureStage
 import com.smriti.app.ui.components.BracketLabel
@@ -85,6 +86,7 @@ fun CaptureScreen(
     var isMicHeld by remember { mutableStateOf(false) }
     var isVoiceOnlyCapture by remember { mutableStateOf(false) }
     var bubbleOn by remember { mutableStateOf(BubbleLauncher.isRunning()) }
+    var speechHindi by remember { mutableStateOf(SpeechLanguage.isHindi(context)) }
     val modelStatus by vm.modelStatus.collectAsState()
     val importing by vm.importing.collectAsState()
     // .litertlm has no registered MIME type, so the picker has to offer every file;
@@ -175,6 +177,18 @@ fun CaptureScreen(
                     labelColor = S.Ink,
                     bracketColor = S.Ink,
                     modifier = Modifier.clickable { onOpenTimeline() }
+                )
+
+                // Speech language. English runs on Parakeet; Hindi switches to Whisper, which is
+                // slower, so it is a deliberate choice rather than auto-detected per note.
+                BracketLabel(
+                    text = if (speechHindi) "hindi" else "en",
+                    labelColor = if (speechHindi) S.Red else S.Ink,
+                    bracketColor = if (speechHindi) S.Red else S.Ink,
+                    modifier = Modifier.clickable {
+                        speechHindi = !speechHindi
+                        SpeechLanguage.setHindi(context, speechHindi)
+                    }
                 )
 
                 BracketLabel(

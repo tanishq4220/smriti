@@ -1,6 +1,7 @@
 package com.smriti.app.capture
 
 import android.content.Context
+import android.util.Log
 import com.smriti.app.ai.Enricher
 import com.smriti.app.data.RecordDao
 import com.smriti.app.data.RecordEntity
@@ -16,6 +17,8 @@ sealed interface CaptureStage {
     // Retained for compatibility; no longer emitted.
     data object Reading : CaptureStage
     data object Listening : CaptureStage
+    /** Speech has ended and Whisper is decoding it on the device: 7-11 s on the Realme. */
+    data object Transcribing : CaptureStage
     // Retained for compatibility; no longer emitted.
     data object Thinking : CaptureStage
     data class Done(val recordId: Long) : CaptureStage
@@ -36,15 +39,42 @@ class CapturePipeline(
                 emit(CaptureStage.Listening)
             }
 
-            val (photoFile, transcript) = coroutineScope {
+            val started = System.currentTimeMillis()
+            val recordId = coroutineScope {
                 val asrDeferred = async { if (withVoice) asr.transcribe() else "" }
-                val photoDeferred = async { camera.capture() }
-                Pair(photoDeferred.await(), asrDeferred.await())
-            }
+                val photoFile = camera.capture()
+                Log.i(TAG, "photo saved in ${System.currentTimeMillis() - started} ms: ${photoFile.name}")
 
-            val recordId = saveRecord(photoFile.absolutePath, transcript)
+                if (!withVoice) return@coroutineScope saveRecord(photoFile.absolutePath, "")
+
+                // The row exists from the moment the photo does. Waiting for Whisper first meant
+                // 10-20 s in which the capture lived only in memory: on the Realme the app went
+                // to the background in that window, ColorOS killed it, and the photo was left
+                // on disk with no record. CAPTURING keeps it out of the enricher until the
+                // speech arrives, and is recovered on the next launch if the process dies.
+                val id = saveRecord(photoFile.absolutePath, "", state = "CAPTURING")
+                val transcript = try {
+                    asrDeferred.await()
+                } catch (t: Throwable) {
+                    if (t is kotlinx.coroutines.CancellationException) throw t
+                    Log.w(TAG, "transcription failed, keeping the photo: ${t.message}")
+                    ""
+                }
+                Log.i(TAG, "record $id transcript: ${transcript.length} chars after " +
+                    "${System.currentTimeMillis() - started} ms")
+                dao.completeCapture(
+                    id = id,
+                    transcript = transcript,
+                    title = titleFor("", transcript, ""),
+                    embedding = embedFor("", "", "", transcript)
+                )
+                Enricher.request(context)
+                id
+            }
+            Log.i(TAG, "capture done: record $recordId")
             emit(CaptureStage.Done(recordId))
         } catch (t: Throwable) {
+            Log.e(TAG, "capture failed: ${t.message}", t)
             emit(CaptureStage.Failed(t.message ?: "Capture pipeline failed"))
         }
     }.flowOn(Dispatchers.IO)
@@ -52,7 +82,9 @@ class CapturePipeline(
     fun runVoiceOnly(): Flow<CaptureStage> = flow {
         try {
             emit(CaptureStage.Listening)
+            val started = System.currentTimeMillis()
             val transcript = asr.transcribe()
+            Log.i(TAG, "voice-only transcript: ${transcript.length} chars after ${System.currentTimeMillis() - started} ms")
             if (!isWorthSaving(transcript)) {
                 emit(CaptureStage.Failed("Nothing heard"))
                 return@flow
@@ -64,7 +96,7 @@ class CapturePipeline(
         }
     }.flowOn(Dispatchers.IO)
 
-    private suspend fun saveRecord(photoPath: String, transcript: String): Long {
+    private suspend fun saveRecord(photoPath: String, transcript: String, state: String = "PENDING"): Long {
         val ocrText = ""
         val now = System.currentTimeMillis()
         val record = RecordEntity(
@@ -78,10 +110,10 @@ class CapturePipeline(
             amountsJson = "[]",
             tagsJson = "[]",
             embedding = embedFor("", "", "", transcript),
-            enrichmentState = "PENDING"
+            enrichmentState = state
         )
         val recordId = dao.insertRecord(record)
-        Enricher.request(context)
+        if (state == "PENDING") Enricher.request(context)
         return recordId
     }
 
@@ -110,6 +142,8 @@ class CapturePipeline(
         Enricher.titleFor(modelTitle, transcript, ocrText)
 
     companion object {
+        private const val TAG = "SmritiCapture"
+
         internal fun isWorthSaving(transcript: String): Boolean =
             transcript.trim().isNotEmpty()
     }

@@ -115,6 +115,9 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
 
     fun stopVoice() {
         (asr as? PushToTalk)?.stopListening()
+        // Whisper takes 7-11 s after release. Saying so is the difference between "working"
+        // and "nothing happened" — the latter is what a user reported from the Realme.
+        if (_stage.value is CaptureStage.Listening) _stage.value = CaptureStage.Transcribing
     }
 
     /**

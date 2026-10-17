@@ -53,6 +53,14 @@ interface RecordDao {
     @Query("UPDATE records SET enrichmentState = 'PENDING' WHERE enrichmentState = 'RUNNING' AND userEdited = 0")
     suspend fun resetRunningToPending()
 
+    /** A capture's speech has arrived: store it and hand the record to the enricher. */
+    @Query("UPDATE records SET transcript = :transcript, title = :title, embedding = :embedding, enrichmentState = 'PENDING' WHERE id = :id")
+    suspend fun completeCapture(id: Long, transcript: String, title: String, embedding: ByteArray?)
+
+    /** Captures whose process died mid-transcription keep their photo and get enriched without speech. */
+    @Query("UPDATE records SET enrichmentState = 'PENDING' WHERE enrichmentState = 'CAPTURING'")
+    suspend fun recoverInterruptedCaptures()
+
     @Query("UPDATE records SET enrichmentState = :state, enrichmentAttempts = enrichmentAttempts + :attemptDelta, enrichmentError = :error WHERE id = :id")
     suspend fun markEnrichment(id: Long, state: String, attemptDelta: Int, error: String?)
 

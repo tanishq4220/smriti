@@ -720,14 +720,14 @@ fun DetailScreen(
                     )
 
                     when (currentRecord.enrichmentState) {
-                        "PENDING", "RUNNING" -> {
+                        "CAPTURING", "PENDING", "RUNNING" -> {
                             Spacer(modifier = Modifier.height(S.sm))
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(S.sm)
                             ) {
                                 ThinkingDots()
-                                BracketLabel(if (currentRecord.enrichmentState == "RUNNING") "understanding" else "queued")
+                                BracketLabel(when (currentRecord.enrichmentState) { "RUNNING" -> "understanding"; "CAPTURING" -> "transcribing"; else -> "queued" })
                             }
                             Spacer(modifier = Modifier.height(S.sm))
                             ShimmerLine(widthFraction = 0.85f)

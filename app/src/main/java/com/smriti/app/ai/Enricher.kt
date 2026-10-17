@@ -43,6 +43,8 @@ object Enricher {
         }
     }
 
+    @Volatile private var recoveredCaptures = false
+
     /**
      * Process every PENDING record. Guarded with a Mutex so two drains never run concurrently.
      */
@@ -51,6 +53,12 @@ object Enricher {
             val appContext = context.applicationContext
             val dao = SmritiDb.get(appContext).recordDao()
             dao.resetRunningToPending()
+            // Only at the first drain of a process: no capture can be in flight yet, so any row
+            // still CAPTURING was orphaned when the app was killed mid-transcription.
+            if (!recoveredCaptures) {
+                dao.recoverInterruptedCaptures()
+                recoveredCaptures = true
+            }
             val pending = dao.pendingEnrichment()
             if (pending.isEmpty()) {
                 return@withLock

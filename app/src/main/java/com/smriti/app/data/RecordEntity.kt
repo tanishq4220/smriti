@@ -17,7 +17,7 @@ data class RecordEntity(
     val amountsJson: String,
     val tagsJson: String,
     val embedding: ByteArray?,
-    val enrichmentState: String = "PENDING",   // PENDING | RUNNING | DONE | FAILED
+    val enrichmentState: String = "PENDING",   // CAPTURING | PENDING | RUNNING | DONE | FAILED
     val enrichmentAttempts: Int = 0,
     val enrichedAt: Long? = null,
     val enrichmentModel: String? = null,

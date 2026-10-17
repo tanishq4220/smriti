@@ -452,14 +452,14 @@ private fun RecordCard(
                 )
 
                 when (record.enrichmentState) {
-                    "PENDING", "RUNNING" -> {
+                    "CAPTURING", "PENDING", "RUNNING" -> {
                         Spacer(modifier = Modifier.height(S.xs))
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(S.sm)
                         ) {
                             ThinkingDots()
-                            BracketLabel(if (record.enrichmentState == "RUNNING") "understanding" else "queued")
+                            BracketLabel(when (record.enrichmentState) { "RUNNING" -> "understanding"; "CAPTURING" -> "transcribing"; else -> "queued" })
                         }
                         Spacer(modifier = Modifier.height(S.sm))
                         ShimmerLine(widthFraction = 0.85f)

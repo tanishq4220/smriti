@@ -111,6 +111,11 @@ class SherpaWhisperAsr(private val context: Context) : Asr, PushToTalk {
                 if (inner in SILENCE_MARKERS || "[$inner]" in SILENCE_MARKERS || "($inner)" in SILENCE_MARKERS) {
                     return ""
                 }
+                // Whisper describes non-speech in a single bracketed tag and invents new ones
+                // freely: "[Sounds of the machine]" came back for room noise on the Realme and
+                // was saved as a voice note. Speech never arrives wholly bracketed, so any lone
+                // tag is noise. "[a] b [c]" has brackets inside and is kept.
+                if (inner.none { it == '[' || it == ']' || it == '(' || it == ')' }) return ""
             }
             return trimmed
         }

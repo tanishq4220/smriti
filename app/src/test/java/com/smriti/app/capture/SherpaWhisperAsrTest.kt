@@ -132,5 +132,16 @@ class SherpaWhisperAsrTest {
         assertEquals("", SherpaWhisperAsr.cleanTranscript("   "))
         assertEquals("", SherpaWhisperAsr.cleanTranscript(""))
     }
-}
 
+    @Test
+    fun `cleanTranscript drops any lone bracketed non-speech tag`() {
+        assertEquals("", SherpaWhisperAsr.cleanTranscript("[Sounds of the machine]"))
+        assertEquals("", SherpaWhisperAsr.cleanTranscript(" (wind blowing) "))
+    }
+
+    @Test
+    fun `cleanTranscript keeps speech that merely contains brackets`() {
+        assertEquals("[a] pay Ramesh [b]", SherpaWhisperAsr.cleanTranscript("[a] pay Ramesh [b]"))
+        assertEquals("call (urgent) the plumber", SherpaWhisperAsr.cleanTranscript("call (urgent) the plumber"))
+    }
+}

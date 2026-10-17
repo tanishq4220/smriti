@@ -99,9 +99,9 @@ class PlatformAsr(private val context: Context) : Asr, PushToTalk {
     }
 
     /**
-     * Release-to-stop, matching [com.smriti.app.capture.GroqWhisperAsr] and `VoskAsr`.
+     * Release-to-stop, matching [com.smriti.app.capture.SherpaWhisperAsr] and `VoskAsr`.
      *
-     * Without this the offline flavor's fallback path behaved differently from every other ASR
+     * Without this the fallback path behaved differently from every other ASR
      * implementation: letting go of the shutter did nothing, and the user waited for
      * SpeechRecognizer's own end-of-speech detection instead of getting an immediate result.
      * `stopListening` ends capture and still delivers whatever was heard, unlike `cancel`.

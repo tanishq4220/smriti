@@ -1,37 +1,8 @@
-import java.util.Properties
-
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
-}
-
-val museKey = run {
-    val props = Properties()
-    val localProps = rootProject.file("local.properties")
-    if (localProps.exists()) {
-        localProps.inputStream().use { props.load(it) }
-        props.getProperty("museApiKey", "")?.trim() ?: ""
-    } else {
-        ""
-    }
-}
-
-// A distribution build carries NO credentials: keys compiled into a shared APK are
-// recoverable from classes.dex in seconds. Build releases with -PdistributionBuild=true
-// and supply keys at runtime via RuntimeKeys.
-val distributionBuild = providers.gradleProperty("distributionBuild").orNull == "true"
-
-val groqKey = run {
-    val props = Properties()
-    val localProps = rootProject.file("local.properties")
-    if (localProps.exists()) {
-        localProps.inputStream().use { props.load(it) }
-        props.getProperty("groqApiKey", "")?.trim() ?: ""
-    } else {
-        ""
-    }
 }
 
 android {
@@ -53,8 +24,8 @@ android {
 
         externalNativeBuild {
             cmake {
-                // libGenie.so is dlopened, not linked, so this builds for every flavour even
-                // though only `offline` ships the QNN libraries it looks for at runtime.
+                // libGenie.so is dlopened, not linked, so this builds without the QNN libraries
+                // present; they are only looked for at runtime.
                 cppFlags += "-std=c++17"
             }
         }
@@ -75,19 +46,6 @@ android {
             // libQnnHtpV81Skel.so is a Hexagon DSP6 ELF, not aarch64. The NDK strip tool cannot
             // read it and fails the build if it tries, so it is excluded from stripping.
             keepDebugSymbols += "**/libQnnHtpV81Skel.so"
-        }
-    }
-
-    flavorDimensions += "llm"
-    productFlavors {
-        create("offline") {
-            isDefault = true
-        }
-        create("devcloud") {
-            applicationIdSuffix = ".devcloud"
-            versionNameSuffix = "-devcloud"
-            buildConfigField("String", "MUSE_API_KEY", "\"${if (distributionBuild) "" else museKey}\"")
-            buildConfigField("String", "GROQ_API_KEY", "\"${if (distributionBuild) "" else groqKey}\"")
         }
     }
 
@@ -202,7 +160,7 @@ tasks.register("assertNoNetworkPermission") {
             include("**/merged_manifest*/**/AndroidManifest.xml")
             include("**/packaged_manifests/**/AndroidManifest.xml")
         }.files
-        val manifests = allManifests.filter { it.path.contains("offline") }
+        val manifests = allManifests
         require(manifests.isNotEmpty()) { "No merged manifest found - run a build first." }
 
         val offenders = mutableListOf<String>()
@@ -227,6 +185,6 @@ tasks.register("assertNoNetworkPermission") {
 }
 
 afterEvaluate {
-    tasks.named("assembleOfflineDebug") { finalizedBy("assertNoNetworkPermission") }
-    tasks.findByName("assembleOfflineRelease")?.finalizedBy("assertNoNetworkPermission")
+    tasks.named("assembleDebug") { finalizedBy("assertNoNetworkPermission") }
+    tasks.findByName("assembleRelease")?.finalizedBy("assertNoNetworkPermission")
 }

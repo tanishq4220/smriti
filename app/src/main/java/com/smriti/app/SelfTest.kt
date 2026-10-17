@@ -33,9 +33,8 @@ object SelfTest {
     /**
      * @param backend "cpu", "gpu" or null for the policy default.
      * @param resetPolicy clears any GPU quarantine before running.
-     * Both are passed through to BackendFactory.create: the offline flavor resets the
-     * policy and forces LlmHolder to rebuild with the requested backend, while the
-     * devcloud flavor logs them but otherwise ignores them.
+     * Both are passed through to BackendFactory.create, which resets the policy and forces
+     * LlmHolder to rebuild with the requested backend.
      */
     fun run(
         context: Context,
@@ -44,7 +43,6 @@ object SelfTest {
         resetPolicy: Boolean = false
     ) {
         scope.launch(Dispatchers.IO) {
-            // backend and resetPolicy only affect the offline flavor; devcloud ignores them.
             Log.i(TAG, "requested backend: ${backend ?: "auto"}")
             Log.i(TAG, "resetPolicy: $resetPolicy")
             Log.i(TAG, "=== SELF TEST START ===")

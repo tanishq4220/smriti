@@ -17,7 +17,7 @@
       location-permission prompt behind it on every Android since 12. Advertising needs neither,
       so nobody is asked for their location to use a capture bridge.
 
-      None of these is INTERNET. Bluetooth is not an IP socket, so the offline flavour still
+      None of these is INTERNET. Bluetooth is not an IP socket, so the app still
       cannot reach the network and assertNoNetworkPermission still passes. That is exactly
       why the bridge is on Bluetooth and not on the LAN.
     -->

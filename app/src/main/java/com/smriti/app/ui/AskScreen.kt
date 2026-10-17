@@ -68,7 +68,7 @@ import kotlinx.coroutines.withContext
 
 class AskViewModel(app: Application) : AndroidViewModel(app) {
     private val dao: RecordDao = SmritiDb.get(app).recordDao()
-    // Flavor-selected: PlatformAsr offline, Groq Whisper in devcloud.
+    // On-device: Whisper, then Vosk, then the platform recogniser — see AsrFactory.
     private val asr: Asr = AsrFactory.create(app)
     private val converters: Converters = Converters()
 

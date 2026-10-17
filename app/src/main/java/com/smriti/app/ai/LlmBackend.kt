@@ -1,10 +1,8 @@
 package com.smriti.app.ai
 
 /**
- * Abstraction over on-device and cloud LLM backends.
- *
- * The shipping build must always be `offline`; `devcloud` exists solely so prompt work
- * does not cost 12-60 s per iteration on a handset.
+ * Abstraction over the on-device LLM. There is no cloud implementation: the app declares no
+ * network permission, so a remote backend could not work even if one were written.
  */
 interface LlmBackend {
     val label: String

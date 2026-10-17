@@ -3,7 +3,7 @@ package com.smriti.app.capture
 import android.content.Context
 
 /**
- * Offline flavor ASR factory.
+ * ASR factory. Every option here runs on the device.
  *
  * Prefers [SherpaWhisperAsr] when a Whisper model is present on-device; falls back
  * to [VoskAsr] when a Vosk model is present; and falls back to [PlatformAsr] otherwise.

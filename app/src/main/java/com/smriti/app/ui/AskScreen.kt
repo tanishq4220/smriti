@@ -38,6 +38,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -167,6 +168,8 @@ fun AskScreen(
     vm: AskViewModel = viewModel()
 ) {
     var query by remember { mutableStateOf("") }
+    // The keyboard covered half the analyzing block on the Realme; asking dismisses it.
+    val focusManager = LocalFocusManager.current
     val answer by vm.answer.collectAsState()
     val busy by vm.busy.collectAsState()
     val thinking by vm.thinking.collectAsState()
@@ -249,7 +252,10 @@ fun AskScreen(
 
             SmritiButton(
                 label = "ask",
-                onClick = { vm.ask(query) },
+                onClick = {
+                    focusManager.clearFocus()
+                    vm.ask(query)
+                },
                 primary = true,
                 enabled = !busy && query.isNotBlank(),
                 modifier = Modifier.fillMaxWidth()
@@ -382,7 +388,7 @@ private fun AnalyzingBlock(thinking: String) {
         }
         Spacer(modifier = Modifier.height(S.sm))
         Text(
-            text = thinking.trim(),
+            text = plainReasoning(thinking),
             style = SmritiType.BodySmall,
             color = S.Muted,
             modifier = Modifier.alpha(ANALYZING_ALPHA)
@@ -391,3 +397,20 @@ private fun AnalyzingBlock(thinking: String) {
 }
 
 private const val ANALYZING_ALPHA = 0.6f
+
+/**
+ * Gemma writes its reasoning in Markdown; rendered raw it showed `**Task:**` and stray `*`
+ * bullets on the phone. Strip emphasis markers and turn list stars into bullets. Not a Markdown
+ * renderer: the block is a dimmed glimpse of the model working, not something to read closely.
+ */
+internal fun plainReasoning(raw: String): String = raw
+    .replace("**", "")
+    .replace("__", "")
+    .lines()
+    .joinToString("\n") { line ->
+        val indent = line.takeWhile { it == ' ' }
+        val body = line.drop(indent.length)
+        if (body.startsWith("* ") || body.startsWith("- ")) "$indent• ${body.drop(2)}" else line
+    }
+    .replace(Regex("\n{3,}"), "\n\n")
+    .trim()

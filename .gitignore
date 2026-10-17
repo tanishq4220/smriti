@@ -32,3 +32,4 @@ mac/.swiftpm/
 
 # CMake/ninja output from the native build
 app/.cxx/
+.claude/worktrees/

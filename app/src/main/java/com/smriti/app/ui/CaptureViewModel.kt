@@ -48,6 +48,8 @@ class CaptureViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         refreshModelStatus()
+        // Have the speech model resident before the first hold, not loading during it.
+        viewModelScope.launch { asr.warmUp() }
     }
 
     fun refreshModelStatus() {

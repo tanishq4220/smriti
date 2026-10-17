@@ -37,7 +37,10 @@ abstract class SherpaOfflineAsr(protected val context: Context) : Asr, PushToTal
 
     override suspend fun transcribe(maxMillis: Long): String = withContext(Dispatchers.IO) {
         try {
-            val recognizer = recognizer()
+            // The microphone starts before the model is loaded, not after. Loading first meant
+            // the 8-13 s cold load of Parakeet or Whisper ate the time the user was holding the
+            // button: on the Realme an 8 s hold produced 1 s of audio. Load in parallel instead.
+            val recognizerLoad = async { recognizer() }
 
             val deferred = CompletableDeferred<Unit>()
             val rec = AudioRecorder(context)
@@ -68,7 +71,7 @@ abstract class SherpaOfflineAsr(protected val context: Context) : Asr, PushToTal
 
             if (wav == null || !wav.exists()) return@withContext ""
             try {
-                decodeFile(recognizer, wav)
+                decodeFile(recognizerLoad.await(), wav)
             } finally {
                 runCatching { wav.delete() }
             }
@@ -79,6 +82,10 @@ abstract class SherpaOfflineAsr(protected val context: Context) : Asr, PushToTal
             clearPending()
             throw AsrUnavailableException(e.message ?: "$engine transcription failed", cause = e)
         }
+    }
+
+    override suspend fun warmUp() {
+        withContext(Dispatchers.IO) { runCatching { recognizer() } }
     }
 
     /** Decodes a 16 kHz mono WAV. Also the benchmark's entry point. */
@@ -121,6 +128,8 @@ abstract class SherpaOfflineAsr(protected val context: Context) : Asr, PushToTal
 
     private fun clearPending() {
         synchronized(lock) {
+            // The model load now runs while recording; if it fails, stop the mic too.
+            runCatching { recorder?.cancel() }
             pending = null
             recorder = null
         }

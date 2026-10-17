@@ -50,6 +50,10 @@ class LanguageAwareAsr(private val context: Context) : Asr, PushToTalk {
         }
     }
 
+    override suspend fun warmUp() {
+        (if (SpeechLanguage.isHindi(context)) hindi else english).warmUp()
+    }
+
     override fun stopListening() {
         (active as? PushToTalk)?.stopListening()
     }

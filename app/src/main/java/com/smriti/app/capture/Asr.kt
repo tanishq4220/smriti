@@ -10,4 +10,7 @@ package com.smriti.app.capture
 interface Asr {
     suspend fun transcribe(maxMillis: Long = 15_000): String
     fun cancel()
+
+    /** Load the model ahead of the first recording. Optional; engines without one do nothing. */
+    suspend fun warmUp() {}
 }

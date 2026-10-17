@@ -47,7 +47,6 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.smriti.app.ai.Enricher
 import android.content.Intent
-import com.smriti.app.ai.NpuProbe
 import com.smriti.app.capture.AsrSelfTest
 import com.smriti.app.capture.BubbleLauncher
 import com.smriti.app.capture.BubbleService
@@ -81,10 +80,6 @@ class MainActivity : ComponentActivity() {
                 backend = intent.getStringExtra("backend"),
                 resetPolicy = intent.getBooleanExtra("reset_backend", false)
             )
-        }
-
-        if (intent?.getBooleanExtra(NpuProbe.EXTRA, false) == true) {
-            NpuProbe.run(this, lifecycleScope)
         }
 
         if (intent?.getBooleanExtra(AsrSelfTest.EXTRA, false) == true) {

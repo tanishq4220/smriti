@@ -21,32 +21,6 @@ android {
         ndk {
             abiFilters += "arm64-v8a"
         }
-
-        externalNativeBuild {
-            cmake {
-                // libGenie.so is dlopened, not linked, so this builds without the QNN libraries
-                // present; they are only looked for at runtime.
-                cppFlags += "-std=c++17"
-            }
-        }
-    }
-
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
-        }
-    }
-
-    packaging {
-        jniLibs {
-            // fastRPC loads the skel off the filesystem, so the .so files have to be extracted
-            // at install time rather than left compressed inside the APK. AGP defaults this off.
-            useLegacyPackaging = true
-            // libQnnHtpV81Skel.so is a Hexagon DSP6 ELF, not aarch64. The NDK strip tool cannot
-            // read it and fails the build if it tries, so it is excluded from stripping.
-            keepDebugSymbols += "**/libQnnHtpV81Skel.so"
-        }
     }
 
     buildTypes {
@@ -103,9 +77,7 @@ dependencies {
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
-    implementation("com.google.mediapipe:tasks-genai:0.10.35")
-
-    // SPIKE: LiteRT-LM exposes Backend.NPU(); MediaPipe's Java enum is CPU|GPU only.
+    // The only LLM runtime: loads the .litertlm Gemma file AI Edge Gallery uses.
     implementation("com.google.ai.edge.litertlm:litertlm-android:0.17.0")
 
     val cameraxVersion = "1.4.1"

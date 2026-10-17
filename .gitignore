@@ -29,13 +29,6 @@ mac/.build/
 mac/build/
 mac/.swiftpm/
 
-# QAIRT SDK extraction and Genie bundle configs — 228 MB, redistributable only per LICENSE.pdf
-vendor/
-
-# Qualcomm QNN/Genie runtime libraries. NOT committed: redistribution is governed by
-# QAIRT LICENSE.pdf / QNN_NOTICE.txt, unread as of this commit. Restore with scripts/stage-genie-libs.sh
-app/src/offline/jniLibs/
-app/src/main/cpp/include/
 
 # CMake/ninja output from the native build
 app/.cxx/

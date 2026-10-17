@@ -14,7 +14,9 @@ import kotlinx.coroutines.withContext
 
 class LiteRtLmBackend(
     private val engine: Engine,
-    override val label: String
+    override val label: String,
+    /** Called once, after the first generation returns. Clears the GPU crash sentinel. */
+    private var onFirstGeneration: (() -> Unit)? = null
 ) : LlmBackend {
 
     override suspend fun generate(
@@ -31,6 +33,7 @@ class LiteRtLmBackend(
                 ),
                 responseFormat = jsonSchema?.let { ResponseFormat.json(it) }
             )
+            onFirstGeneration?.let { it(); onFirstGeneration = null }
             reply.contents.contents
                 .filterIsInstance<Content.Text>()
                 .joinToString("") { it.text }

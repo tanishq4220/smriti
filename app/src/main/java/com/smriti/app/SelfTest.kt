@@ -34,7 +34,7 @@ object SelfTest {
      * @param backend "cpu", "gpu" or null for the policy default.
      * @param resetPolicy clears any GPU quarantine before running.
      * Both are passed through to BackendFactory.create, which resets the policy and forces
-     * LlmHolder to rebuild with the requested backend.
+     * LiteRtLmHolder to rebuild with the requested backend.
      */
     fun run(
         context: Context,
@@ -70,7 +70,7 @@ object SelfTest {
             }
             val genMs = System.currentTimeMillis() - genStart
 
-            // Approximate: MediaPipe does not expose a token count on the sync path.
+            // Approximate: whitespace-split words, not model tokens.
             val approxTokens = raw.trim().split(Regex("\\s+")).count { it.isNotBlank() }
             val tps = if (genMs > 0) approxTokens * 1000.0 / genMs else 0.0
 

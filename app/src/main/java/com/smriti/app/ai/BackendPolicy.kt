@@ -7,12 +7,14 @@ import android.content.Context
  *
  * Why this is not just a try/catch:
  *
- * MediaPipe's GPU LLM path is tuned for Adreno. On a Mali-G76 (Redmi Note 10S, MediaPipe
- * 0.10.35, observed 2026-09-01) `LlmInference.createFromOptions` succeeds, the model loads in
- * about 13 seconds, and then generation dies with
+ * On-device LLM GPU paths are tuned for Adreno first. On a Mali-G76 (Redmi Note 10S, observed
+ * 2026-09-01 with the MediaPipe engine this app used before LiteRT-LM) the engine initialised,
+ * the model loaded in about 13 seconds, and then generation died with
  *
  *     Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0
- *     in libllm_inference_engine_jni.so
+ *
+ * The Realme RMX5106 this now targets is also Mali (Dimensity 7300, Mali-G615), so the guard
+ * stays in front of LiteRT-LM's GPU backend too.
  *
  * A native segfault takes the whole process with it. No Kotlin catch block runs, no coroutine
  * exception handler fires, and nothing gets a chance to fall back. The failure is only
@@ -58,6 +60,11 @@ class BackendPolicy(context: Context) {
                 .putBoolean(KEY_GPU_PROVEN, true)
                 .commit()
         }
+    }
+
+    /** The GPU refused with an ordinary exception: not a crash, so not grounds for quarantine. */
+    fun clearGpuAttempt() {
+        prefs.edit().putBoolean(KEY_IN_FLIGHT, false).commit()
     }
 
     fun isQuarantined(): Boolean = prefs.getBoolean(KEY_QUARANTINED, false)

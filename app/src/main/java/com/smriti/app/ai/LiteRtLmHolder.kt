@@ -11,78 +11,90 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
+/**
+ * One LiteRT-LM [Engine] for the process lifetime. Loading Gemma costs seconds, and doing it per
+ * call is the single easiest way to make the app feel broken.
+ *
+ * GPU is tried first, then CPU. The GPU attempt is wrapped in [BackendPolicy]'s sentinel because
+ * a GPU delegate failure on Mali is a native SIGSEGV, not an exception: it kills the process and
+ * no fallback code runs. The sentinel stays set until the first full generation completes (see
+ * [LiteRtLmBackend]), so a crash during init *or* during the first answer quarantines the GPU
+ * on the next launch and the app comes back up on CPU.
+ */
 object LiteRtLmHolder {
 
+    enum class Target { GPU, CPU }
+
     private const val TAG = "SmritiEngine"
+
+    /**
+     * Context window. Gemma E2B supports far more, but the KV cache is allocated up front and an
+     * 8 GB phone shares that memory with the camera. Extraction needs well under 1k; recall with
+     * four records of context stays under 3k.
+     */
+    private const val MAX_TOKENS = 4096
 
     @Volatile
     private var backend: LiteRtLmBackend? = null
     private val mutex = Mutex()
 
-    suspend fun get(context: Context): Result<LiteRtLmBackend> {
-        val current = backend
-        if (current != null) {
-            return Result.success(current)
-        }
+    suspend fun get(context: Context, forced: Target? = null): Result<LlmBackend> {
+        backend?.let { return Result.success(it) }
 
         return mutex.withLock {
-            val doubleCheck = backend
-            if (doubleCheck != null) {
-                return@withLock Result.success(doubleCheck)
-            }
+            backend?.let { return@withLock Result.success(it) }
 
             withContext(Dispatchers.IO) {
-                val model = ModelProvisioner.locate(context)
+                val app = context.applicationContext
+                val model = ModelProvisioner.locate(app)
                     ?: return@withContext Result.failure(
-                        ModelMissingException(ModelProvisioner.missingMessage(context))
+                        ModelMissingException(ModelProvisioner.missingMessage(app))
                     )
 
-                val modelPath = model.file.absolutePath
-                val nativeLibDir = context.applicationInfo.nativeLibraryDir
-
-                val targets: List<Pair<String, () -> Backend>> = listOf(
-                    "NPU" to { Backend.NPU(nativeLibraryDir = nativeLibDir) },
-                    "GPU" to { Backend.GPU() },
-                    "CPU" to { Backend.CPU() }
-                )
+                val policy = BackendPolicy(app)
+                val targets = when (forced) {
+                    Target.GPU -> listOf(Target.GPU)
+                    Target.CPU -> listOf(Target.CPU)
+                    null -> if (policy.gpuAllowed()) listOf(Target.GPU, Target.CPU) else {
+                        Log.i(TAG, "GPU quarantined on this device; CPU only")
+                        listOf(Target.CPU)
+                    }
+                }
 
                 var lastError: Throwable? = null
-                for ((name, createBackend) in targets) {
-                    Log.i(TAG, "ATTEMPT $name")
-                    // A clean NPU init is not proof of an NPU run: with no dispatch library the
-                    // runtime falls back to XNNPack and says nothing. Watch the log across the
-                    // attempt so the claim can be checked rather than assumed.
-                    val watch = if (name == "NPU") NpuDispatchCheck.mark() else null
+                for (target in targets) {
+                    Log.i(TAG, "ATTEMPT $target · ${model.label}")
+                    if (target == Target.GPU) policy.markGpuAttemptStarted()
                     var engine: Engine? = null
                     try {
-                        val nativeBackend = createBackend()
-                        engine = Engine(EngineConfig(modelPath = modelPath, backend = nativeBackend))
-
+                        engine = Engine(
+                            EngineConfig(
+                                modelPath = model.file.absolutePath,
+                                backend = if (target == Target.GPU) Backend.GPU() else Backend.CPU(),
+                                maxNumTokens = MAX_TOKENS,
+                                // The model may sit in /data/local/tmp, which the app cannot write.
+                                // Without this, LiteRT-LM tries to put its cache next to the model.
+                                cacheDir = app.cacheDir.absolutePath
+                            )
+                        )
                         val initStart = System.currentTimeMillis()
                         engine.initialize()
-                        val initMs = System.currentTimeMillis() - initStart
+                        Log.i(TAG, "RESULT $target: OK (${System.currentTimeMillis() - initStart} ms)")
 
-                        val hollow = watch?.let { NpuDispatchCheck.failureReason(nativeLibDir, it) }
-                        if (hollow != null) {
-                            // Initialised, but on the CPU. Treat it as a failed rung: this model
-                            // would run anyway and be labelled a lie.
-                            Log.w(TAG, "RESULT $name: FAILED dispatch never loaded ($hollow) — " +
-                                "the engine came up on XNNPack/CPU, not the NPU")
-                            lastError = IllegalStateException("NPU dispatch unavailable: $hollow")
-                            closeQuietly(engine, name)
-                            continue
-                        }
-
-                        Log.i(TAG, "RESULT $name: OK (${initMs}ms)")
-
-                        val label = "$name · ${model.label}"
-                        val litertBackend = LiteRtLmBackend(engine = engine, label = label)
-                        backend = litertBackend
-                        return@withContext Result.success(litertBackend)
+                        val ready = LiteRtLmBackend(
+                            engine = engine,
+                            label = "$target · ${model.label}",
+                            onFirstGeneration = if (target == Target.GPU) policy::markGpuAttemptSurvived else null
+                        )
+                        backend = ready
+                        return@withContext Result.success(ready)
                     } catch (t: Throwable) {
-                        Log.w(TAG, "RESULT $name: FAILED ${t.javaClass.simpleName}: ${t.message}")
+                        Log.w(TAG, "RESULT $target: FAILED ${t.javaClass.simpleName}: ${t.message}")
+                        // A Kotlin-visible failure is not a crash: clear the sentinel so this
+                        // ordinary refusal does not quarantine the GPU on the next launch.
+                        if (target == Target.GPU) policy.clearGpuAttempt()
                         lastError = t
-                        closeQuietly(engine, name)
+                        closeQuietly(engine, target)
                     }
                 }
 
@@ -91,14 +103,15 @@ object LiteRtLmHolder {
         }
     }
 
-    private fun closeQuietly(engine: Engine?, name: String) {
+    private fun closeQuietly(engine: Engine?, target: Target) {
         try {
             engine?.close()
         } catch (closeEx: Throwable) {
-            Log.w(TAG, "Failed to close engine for $name: ${closeEx.message}")
+            Log.w(TAG, "Failed to close engine for $target: ${closeEx.message}")
         }
     }
 
+    /** Drops the engine so the next [get] reloads, e.g. after a new model is imported. */
     fun reset() {
         val old = backend
         backend = null

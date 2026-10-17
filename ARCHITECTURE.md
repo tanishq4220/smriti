@@ -3,8 +3,12 @@
 Offline camera-and-voice work memory. Everything runs on the phone; the app declares no
 network permission at all.
 
-Target: Android 26+, arm64-v8a. Verified build host: macOS arm64, JDK 21, AGP 8.13.2,
-Gradle 8.14, compileSdk 36, build-tools 36.0.0.
+Target: Android 26+, arm64-v8a. Test device: Realme RMX5106 (MediaTek Dimensity 7300 / MT6878,
+Mali GPU, 8 GB RAM, Android 16). Model: Gemma 4 E2B as `gemma-4-E2B-it.litertlm` (~2.6 GB, the
+file Google AI Edge Gallery downloads), run through LiteRT-LM. Verified build host: macOS arm64, JDK 21, AGP 8.13.2,
+Gradle 8.14, compileSdk 36, build-tools 36.0.0. No product flavors: `source env.sh` then
+`./gradlew assembleDebug` → `app/build/outputs/apk/debug/app-debug.apk`, applicationId
+`com.smriti.app`.
 
 > Provenance note: this repository is a reference implementation written outside the iQOO
 > Hackathon event window. Competition rules require all submitted code to be written during
@@ -26,10 +30,17 @@ com.smriti.app
 │   └── Converters.kt            FloatArray <-> ByteArray, Instant <-> Long
 ├── capture/
 │   ├── CameraController.kt      CameraX ImageCapture -> JPEG in filesDir/photos
-│   ├── VoiceRecorder.kt         SpeechRecognizer wrapper behind Asr interface
-│   └── Asr.kt                   interface { suspend fun transcribe(): String }
+│   ├── Asr.kt                   speech-to-text interface
+│   ├── AsrFactory.kt            sherpa-onnx Whisper -> Vosk -> PlatformAsr, first model present wins
+│   ├── SherpaWhisperAsr.kt      Whisper small via sherpa-onnx, on device
+│   ├── VoskAsr.kt               lightweight offline fallback
+│   └── PlatformAsr.kt           Android SpeechRecognizer, last resort
 ├── ai/
-│   ├── LlmEngine.kt             MediaPipe LlmInference lifecycle, single shared instance
+│   ├── LlmBackend.kt            generation interface
+│   ├── LiteRtLmHolder.kt        one LiteRT-LM Engine per process; GPU then CPU
+│   ├── LiteRtLmBackend.kt       LlmBackend over the Engine; clears the GPU sentinel
+│   ├── BackendPolicy.kt         crash sentinel and GPU quarantine
+│   ├── BackendFactory.kt        entry point; optional forced backend for the self-test
 │   ├── Extractor.kt             photo OCR + transcript -> StructuredRecord
 │   ├── Ocr.kt                   ML Kit TextRecognition (Latin + Devanagari)
 │   ├── Embedder.kt              MediaPipe TextEmbedder -> FloatArray
@@ -40,7 +51,7 @@ com.smriti.app
 │   ├── DetailScreen.kt          photo + transcript + fields + tasks
 │   ├── AskScreen.kt             spoken question -> answer + evidence photo
 │   └── theme/                   colours, type
-└── ModelProvisioner.kt          locates the .task file, reports absence clearly
+└── ModelProvisioner.kt          locates the .litertlm file, reports absence clearly
 ```
 
 ## 2. Data model
@@ -87,23 +98,26 @@ Steps 2 and 3 run concurrently. Step 4 cannot start until both finish.
 
 ## 4. Structured extraction
 
-`LlmEngine` holds one `LlmInference` for the process lifetime — loading Gemma per call costs
-seconds and is the single easiest way to make the app feel broken.
-
-MediaPipe API as verified from `tasks-genai:0.10.35` bytecode:
+`LiteRtLmHolder` holds one LiteRT-LM `Engine` for the process lifetime — loading Gemma per call
+costs seconds and is the single easiest way to make the app feel broken.
 
 ```kotlin
-LlmInference.LlmInferenceOptions.builder()
-  .setModelPath(path).setMaxTokens(1024).setMaxTopK(40)
-  .setPreferredBackend(LlmInference.Backend.GPU)   // falls back to CPU on refusal
-  .build()
-engine.generateResponseAsync(prompt, ProgressListener<String> { partial, done -> })
+Engine(EngineConfig(
+  modelPath = model.file.absolutePath,
+  backend = Backend.GPU(),            // then Backend.CPU() if GPU fails or is quarantined
+  maxNumTokens = 4096,                // KV cache is allocated up front; 8 GB shared with camera
+  cacheDir = app.cacheDir.absolutePath  // /data/local/tmp is not writable by the app
+))
 ```
 
-`Backend` is `DEFAULT | CPU | GPU`. There is no NPU value. Do not claim otherwise.
+GPU is tried first, then CPU. A GPU failure on Mali can be a native `SIGSEGV`, which kills the
+process before any fallback runs, so `BackendPolicy` writes a sentinel with `commit()` before
+the GPU attempt and it stays armed until the first generation returns. If a later launch finds
+it uncleared, the GPU is quarantined for good and the engine comes up on CPU. An ordinary
+exception from the GPU clears the sentinel and falls through to CPU without quarantine.
 
-Extraction prompt returns JSON only. A 1B model will sometimes wrap it in prose or emit a
-trailing comma, so `Extractor` must:
+Extraction prompt returns JSON only. A small on-device model will sometimes wrap it in prose or
+emit a trailing comma, so `Extractor` must:
 - slice from the first `{` to the last `}` before parsing,
 - parse with a lenient reader,
 - on failure, retry once with a shortened prompt,
@@ -134,8 +148,12 @@ The evidence photo is the product's whole trust story. Always show it.
 
 - **No `android.permission.INTERNET` in the manifest.** This is the demo's proof, and it also
   makes an accidental cloud call impossible rather than merely unlikely.
-- Model file is never bundled in the APK. `ModelProvisioner` looks in app-internal storage and
-  `/data/local/tmp/llm/`, and when absent shows the exact expected path.
+  `:app:assertNoNetworkPermission` checks the merged manifest after every assemble.
+- Model file is never bundled in the APK. `ModelProvisioner` looks in `filesDir/models`, then
+  `/data/local/tmp/llm/`, and when absent shows the exact expected paths. It gets there either
+  by adb (copy AI Edge Gallery's `gemma-4-E2B-it.litertlm` into `/data/local/tmp/llm/`, chmod
+  644) or by the in-app import: tap the model badge on the capture screen and pick a
+  `.litertlm`, which is copied into `filesDir/models`.
 - `abiFilters += "arm64-v8a"` — keeps the APK near 35 MB instead of 113 MB.
 - Every AI call is cancellable and reports which backend it actually used.
 
@@ -147,7 +165,7 @@ The evidence photo is the product's whole trust story. Always show it.
 | 2 | Room schema, DAO, converters | 1 |
 | 3 | CameraX capture + ML Kit OCR | 1 |
 | 4 | ASR behind the `Asr` interface | 1 |
-| 5 | `LlmEngine` + `Extractor` with the JSON-repair path | 2 |
+| 5 | `LiteRtLmHolder` + `Extractor` with the JSON-repair path | 2 |
 | 6 | `Embedder` + `Recall` | 2, 5 |
 | 7 | Capture / Timeline / Detail / Ask screens | 3, 4, 5, 6 |
 | 8 | Airplane-mode demo rehearsal + seed data | 7 |

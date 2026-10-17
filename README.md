@@ -16,23 +16,18 @@ Recorded on a Moto G05. The clip above runs at 3× speed.*
 
 ## Install it
 
-| Build | What it is | Download |
-|---|---|---|
-| **offline** | The shipping configuration. Models on the handset, **no `INTERNET` permission**. Needs two model files pushed. | [v0.1.0-offline](https://github.com/harshwardhan-kp/smriti/releases/tag/v0.1.0-offline) |
-| **devcloud** | Same app, cloud models, ~5 s instead of 12–60 s per generation. Development only. | [v0.1.0-devcloud](https://github.com/harshwardhan-kp/smriti/releases/tag/v0.1.0-devcloud) |
+There are no product flavors and no release APK for this build. Build from source:
 
 ```bash
-adb install -r smriti-offline-v0.1.0.apk
+source env.sh                        # JDK 21 + Android SDK
+./gradlew assembleDebug              # app/build/outputs/apk/debug/app-debug.apk
+adb install -r app/build/outputs/apk/debug/app-debug.apk
 adb shell am start -n com.smriti.app/.MainActivity --ez smriti_seed true
 ```
 
-Both install side by side — different applicationIds. No sign-in needed; this repo is public
-and the assets download anonymously.
-
-**Neither APK contains an API key.** A key compiled into a shared binary is recoverable from
-`classes.dex` in seconds — verified on our own build before it shipped — so distribution builds
-use `-PdistributionBuild=true`, which blanks the `BuildConfig` fields, and the devcloud flavor
-reads credentials at runtime instead. Each release page has the exact commands.
+applicationId `com.smriti.app`. The APK contains no API key because the app talks to nothing:
+every model runs on the handset. It does need a language model put on the device — see
+[Getting the model on](#getting-the-model-on).
 
 ---
 
@@ -52,7 +47,7 @@ photograph as evidence.
 
 ## The one rule
 
-**The shipping build has no `INTERNET` permission**, and that is enforced, not promised.
+**The app has no `INTERNET` permission**, in every build variant, and that is enforced, not promised.
 
 `:app:assertNoNetworkPermission` reads the *merged* manifest — the one that actually ships — and
 fails the build if `INTERNET` or `ACCESS_NETWORK_STATE` appears. It exists because ML Kit pulls
@@ -63,52 +58,48 @@ green and the installed APK could open a socket.
 The guard has been negative-tested: remove the `tools:node="remove"` lines and the build fails,
 naming every offending entry.
 
-## Two flavors
+## Target
 
-| | `offline` (default, ships) | `devcloud` (development only) |
-|---|---|---|
-| applicationId | `com.smriti.app` | `com.smriti.app.devcloud` |
-| language model | Gemma 3 1B / Qwen2.5 via MediaPipe, on device | Muse Spark 1.2 via `api.meta.ai` |
-| speech | Android `SpeechRecognizer` | Groq `whisper-large-v3-turbo` |
-| `INTERNET` | **absent** | present |
-| network guard | armed | skipped |
-
-Different applicationIds, so both install side by side. Swapping back is a Gradle task, not a
-code change — which is the point: `devcloud` exists because a generation takes 12–60 s on a
-mid-range handset and prompt work at that speed is unworkable.
-
-```bash
-./gradlew assembleOfflineDebug     # ships. guard runs and must stay clean.
-./gradlew assembleDevcloudDebug    # fast iteration. never released.
-```
+| | |
+|---|---|
+| test device | Realme RMX5106 — MediaTek Dimensity 7300 (MT6878), Mali GPU, 8 GB RAM, Android 16 |
+| language model | Gemma 4 E2B, `gemma-4-E2B-it.litertlm` (~2.6 GB) — the file Google AI Edge Gallery downloads |
+| LLM runtime | LiteRT-LM (`com.google.ai.edge.litertlm`), GPU then CPU |
+| speech | sherpa-onnx Whisper → Vosk → platform recogniser, all on device |
+| OCR | ML Kit, Latin + Devanagari |
+| recall embeddings | MediaPipe `tasks-text` text embedder |
+| `INTERNET` | **absent**, enforced by the build |
 
 ## Getting it running
 
 ```bash
-source ~/Claude/iqoo-hackathon/env.sh     # JDK 21 + Android SDK
-./scripts/verify-on-device.sh devcloud    # build, install, seed, self-test, screenshot
+source env.sh                     # JDK 21 + Android SDK
+./scripts/verify-on-device.sh     # build, install, seed, self-test, screenshot
 ```
 
-`verify-on-device.sh` audits the APK's permissions, refuses to continue if the offline flavor
-ever gains `INTERNET`, seeds a demo corpus, runs the model end to end, and checks for crashes.
+`verify-on-device.sh` audits the APK's permissions, refuses to continue if it ever gains
+`INTERNET`, checks for a model on the device, seeds a demo corpus, runs the model end to end,
+and checks for crashes.
 
-**Keys** go in `local.properties` (gitignored) and reach `devcloud` through BuildConfig:
+### Getting the model on
 
-```properties
-museApiKey=...
-groqApiKey=...
-```
+The model is never bundled in the APK. `ModelProvisioner` searches `filesDir/models`, then
+`/data/local/tmp/llm`, and reports the exact paths when nothing is found. Two ways in:
 
-**For the offline flavor** a model must be pushed to the device:
+**Over adb, from Gallery's copy.** If AI Edge Gallery has already downloaded Gemma 4 E2B on the
+phone, copy it across on-device — no 2.6 GB push from the laptop:
 
 ```bash
 adb shell mkdir -p /data/local/tmp/llm
-adb push <model>.task /data/local/tmp/llm/
+adb shell cp /sdcard/Android/data/com.google.ai.edge.gallery/files/Gemma_4_E2B_it/*/gemma-4-E2B-it.litertlm /data/local/tmp/llm/
+adb shell chmod 644 /data/local/tmp/llm/gemma-4-E2B-it.litertlm
 ```
 
-`ModelProvisioner` takes any `*.task` over 100 MB and prefers Gemma when several are present.
-Gemma 3 1B is licence-gated on HuggingFace; `litert-community/Qwen2.5-0.5B-Instruct` is
-Apache-2.0 and needs no acceptance.
+**In the app, no laptop.** Tap the model badge on the capture screen to import a `.litertlm`
+through the Android file picker; it is copied into `filesDir/models`.
+
+Everything except structured extraction and answer synthesis works without the model —
+capture, OCR, speech, timeline and keyword recall.
 
 ## Architecture
 
@@ -120,8 +111,8 @@ mic ────→ Asr ──────────────────�
                           question ─→ Embedder ─→ cosine top-k ─→ answer + evidence photo
 ```
 
-Both `LlmBackend` and `Asr` are interfaces chosen by a per-flavor factory. Everything else is
-shared.
+`LlmBackend` has one implementation, LiteRT-LM. `Asr` is chosen by `AsrFactory` from whichever
+on-device speech model is present.
 
 **Deliberate choices worth knowing:**
 
@@ -129,8 +120,8 @@ shared.
   Revisit around 10k records.
 - **OCR runs both recognizers and keeps whichever read more.** The Latin model returns
   near-empty text on Devanagari, and real Indian workplace paper is routinely bilingual.
-- **The extractor never throws.** A 1B model does not honour schemas: brace-slicing, fence
-  stripping, trailing-comma repair, key aliases (`actions` / `actionItems` / `action_items` /
+- **The extractor never throws.** A small on-device model does not reliably honour schemas:
+  brace-slicing, fence stripping, trailing-comma repair, key aliases (`actions` / `actionItems` / `action_items` /
   `tasks`), arrays of strings where objects were asked for, then one shortened retry, then a
   raw-transcript fallback. Losing a capture because the model rambled is the worst failure this
   app can have.
@@ -141,26 +132,24 @@ shared.
 
 Each of these cost real time. They are here so they cost it only once.
 
-**MediaPipe's `Backend` enum is `DEFAULT | CPU | GPU`.** There is no NPU value — read from the
-shipped AAR with `javap`, not from a blog. True Hexagon execution needs LiteRT-LM with an
-AOT-compiled per-SoC model; Google publishes one for `sm8850`, the iQOO 15's silicon.
+**The GPU can segfault on Mali.** With the MediaPipe engine this app used before LiteRT-LM, a
+Mali-G76 initialised, loaded the model, then died mid-generation with `SIGSEGV` at `0x0` inside
+`libllm_inference_engine_jni.so`. A native crash takes the process with it, so try/catch
+fallback is impossible. The RMX5106 is Mali too, so the guard stays: `LiteRtLmHolder` tries GPU
+then CPU, and `BackendPolicy` writes a sentinel with `commit()` before the GPU attempt. The
+sentinel stays armed until the first generation returns, so a crash during init *or* the first
+answer quarantines the GPU permanently and the next launch comes up on CPU.
 
-**The GPU backend segfaults on Mali.** It initialises, loads the model, then dies mid-generation
-with `SIGSEGV` at `0x0` inside `libllm_inference_engine_jni.so`. A native crash takes the process
-with it, so try/catch fallback is impossible. `BackendPolicy` writes a sentinel with `commit()`
-before each attempt and quarantines the GPU permanently if a later launch finds it uncleared.
+**LiteRT-LM writes its cache next to the model unless told otherwise.** `/data/local/tmp` is
+not writable by the app, so `EngineConfig.cacheDir` points at the app's `cacheDir`.
 
-**Muse Spark's reasoning tokens count against `max_tokens`.** At 512 it spent 509 thinking,
-returned `stop_reason: max_tokens` and an **empty content array with HTTP 200**. Silent success
-returning nothing. `MuseBackend` requests 4× headroom and warns when text is empty.
-
-**`content` from `api.meta.ai` is an array** mixing `redacted_thinking` and `text` entries.
-Taking `content[0]` yields an empty string.
+**`litertlm-android` 0.17.0 ships Kotlin 2.4 metadata, and KSP (for Room) tops out below it.**
+Kotlin stays on 2.0.21 with `-Xskip-metadata-version-check`.
 
 **Android's on-device speech recogniser may have no language pack.** Measured on a Moto G05 on
 stock Android 15: `LANGUAGE_PACK_ERROR`, code 13, for `en-US`. It fails at
-`onStartListening`, not at the gesture. **whisper.cpp is therefore a requirement for the offline
-build, not a stretch goal.** `AsrFactory` in the offline source set is where that swap happens.
+`onStartListening`, not at the gesture. That is why `AsrFactory` prefers sherpa-onnx Whisper, then Vosk, and
+only falls back to the platform recogniser when neither model is on the device.
 
 **Never run Homebrew's `gradle` on this project.** It is 9.7.x, and Gradle ≥ 9.6 removed an
 internal API every AGP 8.x depends on. Use the wrapper. To create one, run `gradle wrapper` in a

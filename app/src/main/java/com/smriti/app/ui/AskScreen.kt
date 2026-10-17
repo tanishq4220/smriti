@@ -2,6 +2,11 @@ package com.smriti.app.ui
 
 import android.app.Application
 import android.graphics.BitmapFactory
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -35,6 +40,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -78,6 +84,14 @@ class AskViewModel(app: Application) : AndroidViewModel(app) {
     private val _busy = MutableStateFlow(false)
     val busy: StateFlow<Boolean> = _busy.asStateFlow()
 
+    /** The model's reasoning so far, streamed while it thinks; cleared once the answer lands. */
+    private val _thinking = MutableStateFlow("")
+    val thinking: StateFlow<String> = _thinking.asStateFlow()
+
+    /** The answer as it decodes, before [answer] carries the finished one and its evidence. */
+    private val _partialAnswer = MutableStateFlow("")
+    val partialAnswer: StateFlow<String> = _partialAnswer.asStateFlow()
+
     private var recall: Recall? = null
 
     private suspend fun getOrCreateRecall(): Recall? = withContext(Dispatchers.IO) {
@@ -94,11 +108,18 @@ class AskViewModel(app: Application) : AndroidViewModel(app) {
         if (q.isBlank()) return
         viewModelScope.launch {
             _busy.value = true
+            _answer.value = null
+            _thinking.value = ""
+            _partialAnswer.value = ""
             try {
                 val recallInstance = getOrCreateRecall()
                 if (recallInstance != null) {
                     val result = withContext(Dispatchers.IO) {
-                        recallInstance.ask(q)
+                        recallInstance.ask(
+                            q,
+                            onThinking = { _thinking.value = it },
+                            onAnswer = { _partialAnswer.value = it }
+                        )
                     }
                     _answer.value = result
                 } else {
@@ -118,6 +139,8 @@ class AskViewModel(app: Application) : AndroidViewModel(app) {
                 )
             } finally {
                 _busy.value = false
+                _thinking.value = ""
+                _partialAnswer.value = ""
             }
         }
     }
@@ -146,6 +169,8 @@ fun AskScreen(
     var query by remember { mutableStateOf("") }
     val answer by vm.answer.collectAsState()
     val busy by vm.busy.collectAsState()
+    val thinking by vm.thinking.collectAsState()
+    val partialAnswer by vm.partialAnswer.collectAsState()
 
     Scaffold(
         topBar = {
@@ -230,7 +255,9 @@ fun AskScreen(
                 modifier = Modifier.fillMaxWidth()
             )
 
-            if (busy) {
+            // The loader only covers the silence before the first token; after that the model's
+            // own words are the progress indicator.
+            if (busy && thinking.isEmpty() && partialAnswer.isEmpty()) {
                 Spacer(modifier = Modifier.height(S.lg))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -242,7 +269,18 @@ fun AskScreen(
                 }
             }
 
-            answer?.let { ans ->
+            // Reasoning is shown only while it is the newest thing the model is saying: once the
+            // answer starts, the thinking is over and the screen shows just the result.
+            AnimatedVisibility(
+                visible = busy && thinking.isNotBlank() && partialAnswer.isEmpty(),
+                enter = fadeIn(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
+                AnalyzingBlock(thinking)
+            }
+
+            val answerText = answer?.answer ?: partialAnswer.takeIf { it.isNotEmpty() }
+            if (answerText != null) {
                 Spacer(modifier = Modifier.height(S.lg))
                 HairlineRule()
                 Spacer(modifier = Modifier.height(S.lg))
@@ -251,12 +289,14 @@ fun AskScreen(
                     SectionLabel("answer")
                     Spacer(modifier = Modifier.height(S.sm))
                     Text(
-                        text = ans.answer,
+                        text = answerText.trim(),
                         style = SmritiType.Body,
                         color = S.Ink
                     )
                 }
+            }
 
+            answer?.let { ans ->
                 if (ans.evidencePhotoPath != null) {
                     Spacer(modifier = Modifier.height(S.lg))
                     SectionLabel("evidence")
@@ -318,3 +358,36 @@ fun AskScreen(
         }
     }
 }
+
+/**
+ * The model's reasoning as it streams in. Dimmed well below the answer's weight: it is there to
+ * show the model working, not to be read as the result.
+ */
+@Composable
+private fun AnalyzingBlock(thinking: String) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .animateContentSize()
+    ) {
+        Spacer(modifier = Modifier.height(S.lg))
+        HairlineRule()
+        Spacer(modifier = Modifier.height(S.lg))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(S.sm)
+        ) {
+            SectionLabel("analyzing")
+            ThinkingDots()
+        }
+        Spacer(modifier = Modifier.height(S.sm))
+        Text(
+            text = thinking.trim(),
+            style = SmritiType.BodySmall,
+            color = S.Muted,
+            modifier = Modifier.alpha(ANALYZING_ALPHA)
+        )
+    }
+}
+
+private const val ANALYZING_ALPHA = 0.6f

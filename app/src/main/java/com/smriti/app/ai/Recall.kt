@@ -45,7 +45,16 @@ class Recall(
         "वाली", "वाले", "बताओ", "दिखाओ", "करो", "था", "थी", "थे", "हैं"
     )
 
-    suspend fun ask(question: String): RecallAnswer {
+    /**
+     * [onThinking] and [onAnswer] stream the model's reasoning and answer (full text so far) as
+     * it decodes. Recall is the one place that thinks: the user is watching and the reasoning
+     * is worth seeing, while background extraction keeps thinking off to stay fast.
+     */
+    suspend fun ask(
+        question: String,
+        onThinking: (String) -> Unit = {},
+        onAnswer: (String) -> Unit = {}
+    ): RecallAnswer {
         return try {
             val allRecords = dao.allRecordsWithEmbedding()
             if (allRecords.isEmpty()) {
@@ -94,7 +103,12 @@ class Recall(
             // present while eight dated commitments sat in the database. Observed on device.
             val openTasks = try { dao.openTasks() } catch (_: Throwable) { emptyList() }
             val prompt = buildPrompt(selectedRecords, openTasks, question)
-            val generatedAnswer = backend.generate(prompt)
+            val generatedAnswer = backend.generateStreaming(
+                prompt,
+                think = true,
+                onThinking = onThinking,
+                onAnswer = onAnswer
+            )
 
             RecallAnswer(
                 answer = generatedAnswer.trim(),

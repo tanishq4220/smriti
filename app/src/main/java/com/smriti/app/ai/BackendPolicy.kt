@@ -67,6 +67,11 @@ class BackendPolicy(context: Context) {
         prefs.edit().putBoolean(KEY_IN_FLIGHT, false).commit()
     }
 
+    /** The GPU loaded but cannot generate on this device. Stop trying it. */
+    fun quarantineGpu() {
+        prefs.edit().putBoolean(KEY_QUARANTINED, true).putBoolean(KEY_IN_FLIGHT, false).commit()
+    }
+
     fun isQuarantined(): Boolean = prefs.getBoolean(KEY_QUARANTINED, false)
 
     /** For the self-test, so a device can be re-evaluated deliberately. */

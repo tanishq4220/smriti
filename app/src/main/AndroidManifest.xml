@@ -93,6 +93,14 @@
                 android:value="Persistent capture overlay the user explicitly enabled" />
         </service>
 
+        <!-- LiteRT-LM's GPU backend runs on OpenCL. Since Android 12 vendor libraries are outside
+             an app's linker namespace unless named here; without these the engine initialises on
+             the GPU and then fails the first generation with "Can not find OpenCL library on this
+             device" (seen on the Realme RMX5106, Mali-G615). required="false" so a phone without
+             OpenCL still installs and simply falls back to CPU. -->
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
+        <uses-native-library android:name="libvndksupport.so" android:required="false" />
+
     </application>
 
 </manifest>

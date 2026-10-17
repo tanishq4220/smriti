@@ -1,3 +1,5 @@
+@file:OptIn(com.google.ai.edge.litertlm.ExperimentalApi::class)
+
 package com.smriti.app.ai
 
 import android.content.Context
@@ -5,6 +7,8 @@ import android.util.Log
 import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
+import com.google.ai.edge.litertlm.ExperimentalFlags
+import com.smriti.app.BuildConfig
 import com.smriti.app.ModelProvisioner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -35,7 +39,7 @@ object LiteRtLmHolder {
     private const val MAX_TOKENS = 4096
 
     @Volatile
-    private var backend: LiteRtLmBackend? = null
+    private var backend: LlmBackend? = null
     private val mutex = Mutex()
 
     suspend fun get(context: Context, forced: Target? = null): Result<LlmBackend> {
@@ -50,6 +54,9 @@ object LiteRtLmHolder {
                     ?: return@withContext Result.failure(
                         ModelMissingException(ModelProvisioner.missingMessage(app))
                     )
+
+                // Debug builds record real prefill/decode rates; LiteRtLmBackend logs them as SPEED.
+                ExperimentalFlags.enableBenchmark = BuildConfig.DEBUG
 
                 val policy = BackendPolicy(app)
                 val targets = when (forced) {
@@ -81,11 +88,9 @@ object LiteRtLmHolder {
                         engine.initialize()
                         Log.i(TAG, "RESULT $target: OK (${System.currentTimeMillis() - initStart} ms)")
 
-                        val ready = LiteRtLmBackend(
-                            engine = engine,
-                            label = "$target · ${model.label}",
-                            onFirstGeneration = if (target == Target.GPU) policy::markGpuAttemptSurvived else null
-                        )
+                        val engineBackend = LiteRtLmBackend(engine, "$target · ${model.label}")
+                        val ready: LlmBackend =
+                            if (target == Target.GPU) GpuGuarded(engineBackend, app, policy) else engineBackend
                         backend = ready
                         return@withContext Result.success(ready)
                     } catch (t: Throwable) {
@@ -109,6 +114,40 @@ object LiteRtLmHolder {
         } catch (closeEx: Throwable) {
             Log.w(TAG, "Failed to close engine for $target: ${closeEx.message}")
         }
+    }
+
+    /**
+     * Holds the GPU sentinel open across the first generation, because init succeeding proves
+     * little: on the Realme the GPU initialised and then failed the first answer. A crash there
+     * kills the process and the sentinel quarantines the GPU on the next launch. An ordinary
+     * exception means the GPU cannot run this model on this device: quarantine it now, drop the
+     * engine, and answer this same prompt on CPU so the capture is not lost.
+     */
+    private class GpuGuarded(
+        private val gpu: LlmBackend,
+        private val context: Context,
+        private val policy: BackendPolicy
+    ) : LlmBackend {
+        @Volatile private var proven = false
+        override val label: String get() = gpu.label
+
+        override suspend fun generate(prompt: String, maxTokens: Int, jsonSchema: String?): String {
+            if (proven) return gpu.generate(prompt, maxTokens, jsonSchema)
+            return try {
+                gpu.generate(prompt, maxTokens, jsonSchema).also {
+                    proven = true
+                    policy.markGpuAttemptSurvived()
+                }
+            } catch (t: Throwable) {
+                if (t is kotlinx.coroutines.CancellationException) throw t
+                Log.w(TAG, "GPU failed its first generation (${t.message}); quarantining, retrying on CPU")
+                policy.quarantineGpu()
+                reset()
+                get(context, Target.CPU).getOrThrow().generate(prompt, maxTokens, jsonSchema)
+            }
+        }
+
+        override fun close() = gpu.close()
     }
 
     /** Drops the engine so the next [get] reloads, e.g. after a new model is imported. */

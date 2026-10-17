@@ -47,7 +47,7 @@ interface RecordDao {
     @Query("UPDATE records SET embedding = :embedding WHERE id = :id")
     suspend fun setEmbedding(id: Long, embedding: ByteArray?)
 
-    @Query("SELECT * FROM records WHERE enrichmentState = 'PENDING' AND enrichmentAttempts < 3 AND userEdited = 0 ORDER BY createdAt ASC")
+    @Query("SELECT * FROM records WHERE enrichmentState = 'PENDING' AND enrichmentAttempts < 3 AND userEdited = 0 ORDER BY createdAt DESC")
     suspend fun pendingEnrichment(): List<RecordEntity>
 
     @Query("UPDATE records SET enrichmentState = 'PENDING' WHERE enrichmentState = 'RUNNING' AND userEdited = 0")

@@ -68,7 +68,14 @@ object Enricher {
             val extractor = backend?.let { Extractor(it) }
             val gson = Gson()
 
-            for (record in pending) {
+            // Newest first, and the queue is re-read after every record: a capture taken while
+            // a backlog drains (seeded records, or ones saved before a model was imported) is
+            // what the user is looking at, so it goes next instead of waiting minutes behind
+            // old rows. `tried` stops a record that failed this pass from being picked again.
+            val tried = mutableSetOf<Long>()
+            while (true) {
+                val record = dao.pendingEnrichment().firstOrNull { it.id !in tried } ?: break
+                tried += record.id
                 val startMs = System.currentTimeMillis()
                 val ocr = try {
                     Ocr.read(java.io.File(record.photoPath), appContext)

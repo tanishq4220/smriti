@@ -18,25 +18,41 @@ import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
-class SherpaWhisperAsr(private val context: Context) : Asr, PushToTalk {
+/**
+ * Whisper small through sherpa-onnx. Since Parakeet became the default it is used only for
+ * Hindi, with the language pinned to "hi": left on auto-detect, noise was "detected" as Hindi
+ * and decoded into looping Devanagari for up to two minutes.
+ */
+class SherpaWhisperAsr(
+    context: Context,
+    private val language: String = ""
+) : SherpaOfflineAsr(context) {
 
-    private val lock = Any()
+    override val engine: String get() = if (language.isEmpty()) "whisper" else "whisper-$language"
 
-    @Volatile
-    private var pending: CompletableDeferred<Unit>? = null
-    private var recorder: AudioRecorder? = null
+    override val decodeTimeoutMs: Long = DECODE_CAP_MS
+
+    override suspend fun recognizer(): OfflineRecognizer = getOrLoadRecognizer(context, language)
+
+    override fun clean(raw: String): String = cleanTranscript(raw)
 
     companion object {
-        private const val TRAILING_PAD_MS = 700L
+        /** A Hindi note longer than this to decode is not worth the wait. */
+        const val DECODE_CAP_MS = 20_000L
 
         @Volatile
         private var cachedRecognizer: OfflineRecognizer? = null
+        @Volatile
+        private var cachedLanguage: String? = null
         private val recognizerMutex = Mutex()
 
-        internal suspend fun getOrLoadRecognizer(context: Context): OfflineRecognizer {
-            cachedRecognizer?.let { return it }
+        /** One Whisper in memory at a time (~375 MB); a language change rebuilds it. */
+        internal suspend fun getOrLoadRecognizer(context: Context, language: String = ""): OfflineRecognizer {
+            cachedRecognizer?.takeIf { cachedLanguage == language }?.let { return it }
             return recognizerMutex.withLock {
-                cachedRecognizer?.let { return@withLock it }
+                cachedRecognizer?.takeIf { cachedLanguage == language }?.let { return@withLock it }
+                // Not released: a decode that outlived its cap may still be running on it.
+                cachedRecognizer = null
                 val paths = WhisperModelProvisioner.locate(context)
                     ?: throw AsrUnavailableException(WhisperModelProvisioner.missingMessage())
                 try {
@@ -46,7 +62,7 @@ class SherpaWhisperAsr(private val context: Context) : Asr, PushToTalk {
                             whisper = OfflineWhisperModelConfig(
                                 encoder = paths.encoder.absolutePath,
                                 decoder = paths.decoder.absolutePath,
-                                language = "",          // "" = auto-detect language
+                                language = language,    // "" = auto-detect
                                 task = "transcribe"
                             ),
                             tokens = paths.tokens.absolutePath,
@@ -57,6 +73,7 @@ class SherpaWhisperAsr(private val context: Context) : Asr, PushToTalk {
                     )
                     val r = OfflineRecognizer(config = cfg)
                     cachedRecognizer = r
+                    cachedLanguage = language
                     r
                 } catch (e: AsrUnavailableException) {
                     throw e
@@ -121,129 +138,5 @@ class SherpaWhisperAsr(private val context: Context) : Asr, PushToTalk {
         }
 
         internal fun stripSilenceMarkers(raw: String): String = cleanTranscript(raw)
-
-        internal suspend fun transcribeFile(context: Context, wav: File): String = withContext(Dispatchers.IO) {
-            val recognizer = getOrLoadRecognizer(context)
-            val samples = readWavSamples(wav)
-            if (samples.isEmpty()) return@withContext ""
-
-            var stream: OfflineStream? = null
-            try {
-                val text = synchronized(recognizer) {
-                    val s = recognizer.createStream()
-                    stream = s
-                    s.acceptWaveform(samples, 16000)
-                    recognizer.decode(s)
-                    recognizer.getResult(s).text
-                }
-                cleanTranscript(text)
-            } finally {
-                try {
-                    stream?.release()
-                } catch (_: Exception) {
-                }
-            }
-        }
-    }
-
-    private suspend fun getOrLoadRecognizer(): OfflineRecognizer = getOrLoadRecognizer(context)
-
-    override suspend fun transcribe(maxMillis: Long): String = withContext(Dispatchers.IO) {
-        try {
-            val recognizer = getOrLoadRecognizer()
-
-            val deferred = CompletableDeferred<Unit>()
-            val rec = AudioRecorder(context)
-            synchronized(lock) {
-                pending = deferred
-                recorder = rec
-            }
-
-            rec.start()
-
-            val released = withTimeoutOrNull(maxMillis) {
-                deferred.await()
-            } != null
-
-            if (released) {
-                // Humans release the button as they finish the last word, so cutting the
-                // microphone at that exact instant clips it. Wait a short trailing pad
-                // before stopping the recorder so the final syllable is captured.
-                delay(TRAILING_PAD_MS)
-            }
-
-            val wav = try {
-                rec.stop()
-            } catch (_: Exception) {
-                null
-            } finally {
-                synchronized(lock) {
-                    pending = null
-                    recorder = null
-                }
-            }
-
-            if (wav == null || !wav.exists()) return@withContext ""
-
-            var stream: OfflineStream? = null
-            try {
-                val samples = readWavSamples(wav)
-                if (samples.isEmpty()) return@withContext ""
-
-                val text = synchronized(recognizer) {
-                    val s = recognizer.createStream()
-                    stream = s
-                    s.acceptWaveform(samples, 16000)
-                    recognizer.decode(s)
-                    recognizer.getResult(s).text
-                }
-                cleanTranscript(text)
-            } finally {
-                try {
-                    stream?.release()
-                } catch (_: Exception) {
-                }
-                try {
-                    if (wav.exists()) wav.delete()
-                } catch (_: Exception) {
-                }
-            }
-        } catch (e: AsrUnavailableException) {
-            synchronized(lock) {
-                pending = null
-                recorder = null
-            }
-            throw e
-        } catch (e: Exception) {
-            synchronized(lock) {
-                pending = null
-                recorder = null
-            }
-            throw AsrUnavailableException(e.message ?: "Whisper transcription failed", cause = e)
-        }
-    }
-
-    override fun stopListening() {
-        synchronized(lock) {
-            val d = pending
-            if (d != null && !d.isCompleted) {
-                d.complete(Unit)
-            }
-        }
-    }
-
-    override fun cancel() {
-        synchronized(lock) {
-            try {
-                recorder?.cancel()
-            } catch (_: Exception) {
-            }
-            val d = pending
-            if (d != null && !d.isCompleted) {
-                d.complete(Unit)
-            }
-            pending = null
-            recorder = null
-        }
     }
 }
